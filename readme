@@ -1,0 +1,49 @@
+	# Projeto Shorts 9:16 com Blaze Face (MediaPipe)
+
+Este projeto baixa um vídeo do YouTube e gera automaticamente um short em formato vertical (9:16), mantendo o rosto em foco com MediaPipe.
+
+## Requisitos
+
+- **Python 3.11** (obrigatório)
+- `ffmpeg` instalado no sistema`
+
+## Instalação (passo a passo)
+
+1. Verifique a versão do Python:
+
+```bash
+python3.11 --version
+```
+
+2. (Opcional, recomendado) Crie e ative um ambiente virtual:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+```
+
+3. Instale as dependências do projeto:
+
+```bash
+pip install -r requeriments.txt
+```
+
+## Como usar
+
+Execute o projeto informando a URL do vídeo do YouTube:
+
+```bash
+python3.11 app.py -u "https://www.youtube.com/watch?v=SEU_VIDEO"
+```
+
+Se quiser definir o nome do arquivo final:
+
+```bash
+python3.11 app.py -u "https://www.youtube.com/watch?v=SEU_VIDEO" -o "meu_short.mp4"
+```
+
+## Saída
+
+- O vídeo baixado fica na pasta `downloads/`
+- O short final é salvo no arquivo informado em `-o` (padrão: `shorts_output.mp4`)
+- O modelo `blaze_face_short_range.tflite` é baixado automaticamente na primeira execução
