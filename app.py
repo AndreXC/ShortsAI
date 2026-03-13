@@ -6,12 +6,6 @@ from Controller.controller_gerador_shorts import GeradorShortsAutoFace
 
 
 def main():
-    def positive_int(value: str) -> int:
-        ivalue = int(value)
-        if ivalue <= 0:
-            raise argparse.ArgumentTypeError("deve ser um inteiro maior que zero")
-        return ivalue
-    
     parser = argparse.ArgumentParser(
         description=(
             "Gera shorts em 9:16 com rastreamento facial alternável.\n\n"
@@ -56,7 +50,7 @@ def main():
 
     parser.add_argument(
         "--detect-every",
-        type=positive_int,
+        type=int,
         default=3,
         help=(
             "Executa a detecção completa a cada N frames.\n"
@@ -139,7 +133,7 @@ def main():
 
     parser.add_argument(
         "--threads",
-        type=positive_int,
+        type=int,
         default=4,
         help="Quantidade de threads de CPU. Padrão: 4"
     )

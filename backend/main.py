@@ -1,0 +1,372 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import tempfile
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from fastapi import BackgroundTasks, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
+
+from .job_manager import JobManager
+from .schemas import (
+    CancelResponse,
+    GenerateRequest,
+    GenerateResponse,
+    JobHistoryItem,
+    JobStatusResponse,
+    JobsBatchActionResponse,
+    JobsBatchRequest,
+)
+from .worker import process_generation_job
+
+app = FastAPI(title='AI Shorts Generator API', version='1.0.0')
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=['*'],
+    allow_credentials=True,
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
+
+job_manager = JobManager()
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+OUTPUTS_DIRS = [Path('outputs'), PROJECT_ROOT / 'outputs']
+
+
+def _normalized_output_dirs() -> list[Path]:
+    unique: list[Path] = []
+    seen: set[str] = set()
+
+    for raw in OUTPUTS_DIRS:
+        resolved = raw.resolve()
+        key = str(resolved).lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(resolved)
+
+    return unique
+
+
+def _list_output_jobs(limit: int) -> list[dict[str, Any]]:
+    collected: list[Path] = []
+    for directory in _normalized_output_dirs():
+        directory.mkdir(parents=True, exist_ok=True)
+        collected.extend(directory.glob('*.mp4'))
+
+    files = sorted(collected, key=lambda file: file.stat().st_mtime, reverse=True)
+    rows: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for file in files[: max(1, limit)]:
+        if file.stem in seen_ids:
+            continue
+        seen_ids.add(file.stem)
+        stat = file.stat()
+        created_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+        manifest_path = file.with_suffix('.json')
+        manifest: dict[str, Any] = {}
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+            except (OSError, json.JSONDecodeError):
+                manifest = {}
+
+        detector_backend = manifest.get('detector_backend')
+        if detector_backend not in {'blaze', 'retinaface'}:
+            detector_backend = None
+
+        manifest_metadata = manifest.get('result_metadata')
+        if not isinstance(manifest_metadata, dict):
+            manifest_metadata = {}
+        rows.append(
+            {
+                'job_id': file.stem,
+                'status': 'completed',
+                'detector_backend': detector_backend,
+                'created_at': created_at,
+                'finished_at': created_at,
+                'duration_seconds': None,
+                'result_url': f'/result/{file.stem}',
+                'source_url': None,
+                'error': None,
+                'result_metadata': {
+                    'duration_seconds': manifest_metadata.get('duration_seconds'),
+                    'resolution': manifest_metadata.get('resolution'),
+                    'codec': manifest_metadata.get('codec'),
+                    'size_bytes': stat.st_size,
+                },
+            }
+        )
+    return rows
+
+
+def _resolve_output_file(job_id: str) -> Path | None:
+    if '..' in job_id or '/' in job_id or '\\' in job_id:
+        return None
+
+    for output_root in _normalized_output_dirs():
+        output_root.mkdir(parents=True, exist_ok=True)
+        candidate = (output_root / f'{job_id}.mp4').resolve()
+        if output_root not in candidate.parents:
+            continue
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _resolve_manifest_files(job_id: str) -> list[Path]:
+    files: list[Path] = []
+    seen: set[str] = set()
+    for output_root in _normalized_output_dirs():
+        candidate = (output_root / f'{job_id}.json').resolve()
+        key = str(candidate).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if output_root not in candidate.parents:
+            continue
+        if candidate.exists():
+            files.append(candidate)
+    return files
+
+
+@app.get('/health')
+async def health() -> dict[str, str]:
+    return {'status': 'ok'}
+
+
+@app.post('/generate', response_model=GenerateResponse, status_code=202)
+async def generate(payload: GenerateRequest, background_tasks: BackgroundTasks) -> GenerateResponse:
+    job_id = job_manager.create_job(url=payload.url, settings=payload.settings.model_dump())
+
+    background_tasks.add_task(
+        process_generation_job,
+        job_manager,
+        job_id,
+        payload.model_dump(),
+    )
+
+    return GenerateResponse(job_id=job_id)
+
+
+@app.get('/status/{job_id}', response_model=JobStatusResponse)
+async def get_status(job_id: str) -> JobStatusResponse:
+    status = job_manager.get_status(job_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail='Job nao encontrado')
+    return status
+
+
+@app.post('/cancel/{job_id}', response_model=CancelResponse)
+async def cancel_job(job_id: str) -> CancelResponse:
+    if not job_manager.exists(job_id):
+        raise HTTPException(status_code=404, detail='Job nao encontrado')
+
+    accepted = job_manager.request_cancel(job_id)
+    message = 'Solicitacao de cancelamento enviada.' if accepted else 'Job ja finalizado e nao pode ser cancelado.'
+    return CancelResponse(job_id=job_id, accepted=accepted, message=message)
+
+
+@app.get('/jobs', response_model=list[JobHistoryItem])
+async def list_jobs(limit: int = 20) -> list[JobHistoryItem]:
+    safe_limit = max(1, min(100, int(limit)))
+    memory_history = job_manager.list_jobs(limit=safe_limit)
+    known_ids = {item['job_id'] for item in memory_history}
+
+    for output_item in _list_output_jobs(limit=safe_limit):
+        if output_item['job_id'] not in known_ids:
+            memory_history.append(output_item)
+
+    merged_sorted = sorted(
+        memory_history,
+        key=lambda item: item['created_at'],
+        reverse=True,
+    )[:safe_limit]
+    return [JobHistoryItem.model_validate(item) for item in merged_sorted]
+
+
+@app.post('/jobs/delete', response_model=JobsBatchActionResponse)
+async def delete_jobs(payload: JobsBatchRequest) -> JobsBatchActionResponse:
+    deleted: list[str] = []
+    not_found: list[str] = []
+
+    for raw_job_id in payload.job_ids:
+        job_id = str(raw_job_id).strip()
+        if not job_id:
+            continue
+
+        removed_any = False
+        output_file = _resolve_output_file(job_id)
+        if output_file:
+            try:
+                output_file.unlink(missing_ok=True)
+                removed_any = True
+            except OSError:
+                pass
+
+        for manifest_file in _resolve_manifest_files(job_id):
+            try:
+                manifest_file.unlink(missing_ok=True)
+                removed_any = True
+            except OSError:
+                pass
+
+        removed_any = job_manager.remove_job(job_id) or removed_any
+        if removed_any:
+            deleted.append(job_id)
+        else:
+            not_found.append(job_id)
+
+    return JobsBatchActionResponse(deleted=deleted, not_found=not_found)
+
+
+@app.post('/jobs/download-zip')
+async def download_zip(payload: JobsBatchRequest) -> FileResponse:
+    selected_files: list[tuple[str, Path]] = []
+    for raw_job_id in payload.job_ids:
+        job_id = str(raw_job_id).strip()
+        if not job_id:
+            continue
+        output_file = _resolve_output_file(job_id)
+        if output_file:
+            selected_files.append((job_id, output_file))
+
+    if not selected_files:
+        raise HTTPException(status_code=404, detail='Nenhum arquivo encontrado para compactar')
+
+    fd, temp_zip = tempfile.mkstemp(prefix='shorts_', suffix='.zip')
+    os.close(fd)
+    zip_path = Path(temp_zip)
+
+    used_names: set[str] = set()
+    with zipfile.ZipFile(zip_path, mode='w', compression=zipfile.ZIP_DEFLATED) as zip_file:
+        for job_id, output_file in selected_files:
+            arcname = output_file.name
+            if arcname in used_names:
+                arcname = f'{job_id}_{output_file.name}'
+            used_names.add(arcname)
+            zip_file.write(output_file, arcname=arcname)
+
+    return FileResponse(
+        path=str(zip_path),
+        media_type='application/zip',
+        filename='shorts-selected.zip',
+        background=BackgroundTask(lambda: os.remove(zip_path) if zip_path.exists() else None),
+    )
+
+
+@app.get('/result/{job_id}')
+async def get_result(job_id: str) -> FileResponse:
+    job = job_manager.get_job(job_id)
+    if not job:
+        fallback = _resolve_output_file(job_id)
+        if fallback:
+            return FileResponse(
+                path=str(fallback),
+                media_type='video/mp4',
+                filename=fallback.name,
+            )
+        raise HTTPException(status_code=404, detail='Job nao encontrado')
+
+    if job.get('status') != 'completed':
+        raise HTTPException(status_code=409, detail='O job ainda nao foi concluido')
+
+    path = job.get('result_path')
+    if not path:
+        raise HTTPException(status_code=404, detail='Resultado nao encontrado')
+
+    return FileResponse(
+        path=path,
+        media_type='video/mp4',
+        filename=f'short_{job_id}.mp4',
+    )
+
+
+@app.get('/source/{job_id}')
+async def get_source(job_id: str) -> FileResponse:
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail='Job nao encontrado')
+
+    path = job.get('source_path')
+    if not path:
+        raise HTTPException(status_code=404, detail='Video de origem ainda indisponivel')
+
+    source_path = Path(path)
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail='Arquivo de origem nao encontrado')
+
+    return FileResponse(
+        path=str(source_path),
+        media_type='video/mp4',
+        filename=source_path.name,
+    )
+
+
+@app.websocket('/logs/{job_id}')
+async def logs_socket(websocket: WebSocket, job_id: str) -> None:
+    await websocket.accept()
+
+    if not job_manager.exists(job_id):
+        await websocket.send_json({'type': 'error', 'message': 'Job nao encontrado'})
+        await websocket.close(code=1008)
+        return
+
+    last_version = -1
+    log_cursor = 0
+
+    try:
+        while True:
+            job = job_manager.get_job(job_id)
+            if not job:
+                await websocket.send_json({'type': 'error', 'message': 'Job removido'})
+                break
+
+            logs: list[dict[str, Any]] = job.get('logs', [])
+            if log_cursor < len(logs):
+                for entry in logs[log_cursor:]:
+                    await websocket.send_json(
+                        {
+                            'type': 'log',
+                            'data': {
+                                'timestamp': entry['timestamp'].isoformat(),
+                                'message': entry['message'],
+                            },
+                        }
+                    )
+                log_cursor = len(logs)
+
+            version = int(job.get('version', 0))
+            if version != last_version:
+                status_payload = job_manager.get_status(job_id)
+                if status_payload is None:
+                    await websocket.send_json({'type': 'error', 'message': 'Status indisponivel'})
+                    break
+                await websocket.send_json(
+                    {
+                        'type': 'status',
+                        'data': status_payload.model_dump(mode='json'),
+                    }
+                )
+                last_version = version
+
+            if job.get('status') in {'completed', 'error', 'cancelled'}:
+                await websocket.send_json({'type': 'done', 'status': job.get('status')})
+                break
+
+            await asyncio.sleep(0.35)
+
+    except WebSocketDisconnect:
+        return
+    finally:
+        try:
+            await websocket.close()
+        except RuntimeError:
+            pass
