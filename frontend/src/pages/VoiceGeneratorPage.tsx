@@ -1,17 +1,30 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { AlertTriangle, AudioLines, CheckCircle2, LoaderCircle, Mic, MicOff, Upload, Wand2 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { AudioSettingsModal } from '@/components/AudioSettingsModal'
+import { GeneratedVoiceAudiosScreen } from '@/components/GeneratedVoiceAudiosScreen'
 import { VoicePipelineFlow } from '@/components/VoicePipelineFlow'
 import { Button } from '@/components/ui/button'
+import { upsertVoiceHistory } from '@/lib/voice-storage'
 import { cn } from '@/lib/utils'
 import { generateVoice, getVoiceResultAudioUrl, getVoiceStatus } from '@/services/api'
 import { getVoiceWsUrl } from '@/services/config'
 import { useToastStore } from '@/store/toastStore'
-import { getVoiceBaseTimeline, normalizeVoiceTimeline } from '@/types/defaults'
-import type { JobStatusResponse, TimelineStep, WebSocketPayload } from '@/types/job'
+import { defaultAudioSettings, getVoiceBaseTimeline, normalizeVoiceTimeline } from '@/types/defaults'
+import type { AudioGenerationSettings, JobStatusResponse, TimelineStep, WebSocketPayload } from '@/types/job'
 
 type InputMode = 'upload' | 'record'
+
+interface VoiceGeneratorPageProps {
+  settings: AudioGenerationSettings
+  settingsOpen: boolean
+  onSettingsOpenChange: (open: boolean) => void
+  onSettingChange: <K extends keyof AudioGenerationSettings>(key: K, value: AudioGenerationSettings[K]) => void
+  onResetSettings: () => void
+  showGeneratedAudiosScreen: boolean
+  onShowGeneratedAudiosScreenChange: (open: boolean) => void
+}
 
 function formatDuration(seconds?: number | null) {
   if (seconds === null || seconds === undefined || Number.isNaN(seconds)) {
@@ -21,6 +34,16 @@ function formatDuration(seconds?: number | null) {
   const minutes = Math.floor(safe / 60)
   const rest = safe % 60
   return `${minutes}m ${String(rest).padStart(2, '0')}s`
+}
+
+function formatCompactDuration(seconds?: number | null) {
+  if (seconds === null || seconds === undefined || Number.isNaN(seconds)) {
+    return '--'
+  }
+  const safe = Math.max(0, Math.floor(seconds))
+  const minutes = Math.floor(safe / 60)
+  const rest = safe % 60
+  return `${minutes}:${String(rest).padStart(2, '0')}`
 }
 
 function formatBytes(value?: number | null) {
@@ -41,7 +64,7 @@ function extensionFromMimeType(mimeType: string) {
   return 'webm'
 }
 
-function initialVoiceStatus(jobId: string): JobStatusResponse {
+function initialVoiceStatus(jobId: string, settings: AudioGenerationSettings): JobStatusResponse {
   return {
     job_id: jobId,
     status: 'queued',
@@ -56,18 +79,27 @@ function initialVoiceStatus(jobId: string): JobStatusResponse {
       phase: 'queued',
     },
     logs: [],
-    settings: { model_name: 'xtts_v2' },
+    settings: { model_name: 'xtts_v2', ...settings },
     result_metadata: null,
     version: 0,
   }
 }
 
-export function VoiceGeneratorPage() {
+export function VoiceGeneratorPage({
+  settings,
+  settingsOpen,
+  onSettingsOpenChange,
+  onSettingChange,
+  onResetSettings,
+  showGeneratedAudiosScreen,
+  onShowGeneratedAudiosScreenChange,
+}: VoiceGeneratorPageProps) {
   const pushToast = useToastStore((state) => state.push)
 
   const [inputMode, setInputMode] = useState<InputMode>('upload')
   const [referenceFile, setReferenceFile] = useState<File | null>(null)
   const [referencePreviewUrl, setReferencePreviewUrl] = useState('')
+  const [referenceDuration, setReferenceDuration] = useState<number | null>(null)
   const [text, setText] = useState('')
   const [jobId, setJobId] = useState<string | null>(null)
   const [status, setStatus] = useState<JobStatusResponse | null>(null)
@@ -76,6 +108,8 @@ export function VoiceGeneratorPage() {
   const [isRecording, setIsRecording] = useState(false)
   const [recordSeconds, setRecordSeconds] = useState(0)
   const [recordError, setRecordError] = useState<string | null>(null)
+  const [pendingGenerate, setPendingGenerate] = useState(false)
+  const savedHistoryRef = useRef<string | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
@@ -83,8 +117,14 @@ export function VoiceGeneratorPage() {
   const recordChunksRef = useRef<Blob[]>([])
 
   const timeline: TimelineStep[] = status?.timeline ?? getVoiceBaseTimeline()
-  const isProcessing = Boolean(jobId) && status?.status !== 'completed'
   const isCompleted = status?.status === 'completed'
+  const usesModelSpeaker = settings.speaker.trim().length > 0
+  const screen = useMemo(() => {
+    if (showGeneratedAudiosScreen) return 'library'
+    if (isCompleted) return 'done'
+    if (jobId) return 'processing'
+    return 'idle'
+  }, [isCompleted, jobId, showGeneratedAudiosScreen])
 
   const generationSeconds =
     status?.started_at && status?.finished_at
@@ -93,24 +133,74 @@ export function VoiceGeneratorPage() {
 
   const resultAudioUrl = jobId ? getVoiceResultAudioUrl(jobId) : ''
 
-  const canGenerate = !!referenceFile && text.trim().length > 0 && !isSubmitting
-
-  useEffect(() => {
-    if (!referenceFile) {
-      setReferencePreviewUrl('')
-      return
-    }
-
-    const url = URL.createObjectURL(referenceFile)
-    setReferencePreviewUrl(url)
-    return () => URL.revokeObjectURL(url)
-  }, [referenceFile])
+  const canGenerate = (usesModelSpeaker || !!referenceFile) && text.trim().length > 0 && !isSubmitting
 
   useEffect(() => {
     if (!isRecording) return
     const timer = window.setInterval(() => setRecordSeconds((value) => value + 1), 1000)
     return () => window.clearInterval(timer)
   }, [isRecording])
+
+  useEffect(() => {
+    if (!referenceFile) {
+      setReferencePreviewUrl('')
+      setReferenceDuration(null)
+      return
+    }
+
+    const objectUrl = window.URL.createObjectURL(referenceFile)
+    setReferencePreviewUrl(objectUrl)
+
+    return () => {
+      window.URL.revokeObjectURL(objectUrl)
+    }
+  }, [referenceFile])
+
+  useEffect(() => {
+    if (!referencePreviewUrl) {
+      setReferenceDuration(null)
+      return
+    }
+
+    const audio = document.createElement('audio')
+    audio.preload = 'metadata'
+    audio.src = referencePreviewUrl
+
+    const handleLoadedMetadata = () => {
+      setReferenceDuration(Number.isFinite(audio.duration) ? audio.duration : null)
+    }
+    const handleError = () => {
+      setReferenceDuration(null)
+    }
+
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata)
+    audio.addEventListener('error', handleError)
+
+    return () => {
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
+      audio.removeEventListener('error', handleError)
+      audio.src = ''
+    }
+  }, [referencePreviewUrl])
+
+  useEffect(() => {
+    if (!usesModelSpeaker) {
+      return
+    }
+
+    setReferenceFile(null)
+    setRecordError(null)
+
+    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+      recorderRef.current.stop()
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop())
+      mediaStreamRef.current = null
+    }
+    setIsRecording(false)
+    setRecordSeconds(0)
+  }, [usesModelSpeaker])
 
   useEffect(() => {
     return () => {
@@ -147,6 +237,29 @@ export function VoiceGeneratorPage() {
   }, [jobId])
 
   useEffect(() => {
+    if (!jobId || status?.status !== 'completed') {
+      return
+    }
+
+    if (savedHistoryRef.current === jobId) {
+      return
+    }
+
+    upsertVoiceHistory({
+      job_id: jobId,
+      created_at: status.created_at,
+      finished_at: status.finished_at ?? null,
+      text_preview: text.trim(),
+      reference_name: referenceFile?.name ?? null,
+      input_mode: inputMode,
+      result_url: getVoiceResultAudioUrl(jobId),
+      settings: { ...settings },
+      result_metadata: status.result_metadata ?? null,
+    })
+    savedHistoryRef.current = jobId
+  }, [inputMode, jobId, referenceFile?.name, settings, status?.created_at, status?.finished_at, status?.result_metadata, status?.status, text])
+
+  useEffect(() => {
     if (!jobId) return
 
     let active = true
@@ -174,6 +287,7 @@ export function VoiceGeneratorPage() {
   }, [jobId])
 
   const handleSwitchMode = (nextMode: InputMode) => {
+    if (usesModelSpeaker) return
     if (nextMode === inputMode) return
     setInputMode(nextMode)
     setReferenceFile(null)
@@ -191,12 +305,14 @@ export function VoiceGeneratorPage() {
   }
 
   const handlePickFile = (file: File | null) => {
+    if (usesModelSpeaker) return
     if (!file) return
     setReferenceFile(file)
     setRecordError(null)
   }
 
   const startRecording = async () => {
+    if (usesModelSpeaker) return
     if (isRecording) return
     setRecordError(null)
     setReferenceFile(null)
@@ -253,23 +369,55 @@ export function VoiceGeneratorPage() {
     setIsRecording(false)
   }
 
-  const handleGenerate = async () => {
-    if (!referenceFile || !text.trim()) return
+  const openSettingsBeforeGenerate = () => {
+    if ((!referenceFile && !usesModelSpeaker) || !text.trim()) return
+    onShowGeneratedAudiosScreenChange(false)
+    setPendingGenerate(true)
+    onSettingsOpenChange(true)
+  }
+
+  const handleConfirmGenerate = async () => {
+    if ((!referenceFile && !usesModelSpeaker) || !text.trim()) return
 
     setIsSubmitting(true)
     setStatus(null)
     setJobId(null)
+    savedHistoryRef.current = null
 
     try {
       const formData = new FormData()
-      formData.append('audio_file', referenceFile, referenceFile.name)
+      if (!usesModelSpeaker && referenceFile) {
+        formData.append('audio_file', referenceFile, referenceFile.name)
+      }
       formData.append('text', text.trim())
-      formData.append('language', 'pt')
-      formData.append('speed', '1.4')
+      formData.append('language', settings.language.trim() || defaultAudioSettings.language)
+      formData.append('speed', String(Number.isFinite(settings.speed) ? settings.speed : defaultAudioSettings.speed))
+      formData.append('split_sentences', String(settings.split_sentences))
+
+      if (settings.speaker.trim()) {
+        formData.append('speaker', settings.speaker.trim())
+      }
+      if (settings.speaker_wav.trim()) {
+        formData.append('speaker_wav', settings.speaker_wav.trim())
+      }
+      if (settings.emotion.trim()) {
+        formData.append('emotion', settings.emotion.trim())
+      }
+      if (settings.prepared_voice_ref.trim()) {
+        formData.append('prepared_voice_ref', settings.prepared_voice_ref.trim())
+      }
+      if (settings.pipe_out.trim()) {
+        formData.append('pipe_out', settings.pipe_out.trim())
+      }
+      if (settings.tts_kwargs_text.trim()) {
+        formData.append('tts_kwargs_text', settings.tts_kwargs_text.trim())
+      }
 
       const response = await generateVoice(formData)
       setJobId(response.job_id)
-      setStatus(initialVoiceStatus(response.job_id))
+      setStatus(initialVoiceStatus(response.job_id, settings))
+      setPendingGenerate(false)
+      onSettingsOpenChange(false)
       window.scrollTo({ top: 0, behavior: 'smooth' })
     } catch {
       pushToast({
@@ -290,12 +438,19 @@ export function VoiceGeneratorPage() {
     setRecordError(null)
     setIsRecording(false)
     setRecordSeconds(0)
+    setPendingGenerate(false)
+    savedHistoryRef.current = null
+    onSettingsOpenChange(false)
   }
 
   return (
     <div className='mx-auto w-full max-w-6xl px-4 py-6 md:px-8'>
       <AnimatePresence mode='wait'>
-        {!jobId ? (
+        {screen === 'library' ? (
+          <GeneratedVoiceAudiosScreen onBack={() => onShowGeneratedAudiosScreenChange(false)} />
+        ) : null}
+
+        {screen === 'idle' ? (
           <motion.section key='voice-idle' initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
             <div className='mx-auto w-full max-w-3xl rounded-[30px] border border-border bg-card p-6'>
               <div className='mb-5'>
@@ -309,8 +464,10 @@ export function VoiceGeneratorPage() {
                 <button
                   type='button'
                   onClick={() => handleSwitchMode('upload')}
+                  disabled={usesModelSpeaker}
                   className={cn(
                     'rounded-full px-4 py-1.5 text-xs transition-colors',
+                    usesModelSpeaker && 'cursor-not-allowed opacity-50',
                     inputMode === 'upload' ? 'bg-card text-foreground' : 'text-muted',
                   )}
                 >
@@ -319,8 +476,10 @@ export function VoiceGeneratorPage() {
                 <button
                   type='button'
                   onClick={() => handleSwitchMode('record')}
+                  disabled={usesModelSpeaker}
                   className={cn(
                     'rounded-full px-4 py-1.5 text-xs transition-colors',
+                    usesModelSpeaker && 'cursor-not-allowed opacity-50',
                     inputMode === 'record' ? 'bg-card text-foreground' : 'text-muted',
                   )}
                 >
@@ -328,7 +487,16 @@ export function VoiceGeneratorPage() {
                 </button>
               </div>
 
-              {inputMode === 'upload' ? (
+              {usesModelSpeaker ? (
+                <div className='mb-4 rounded-2xl border border-border bg-surface p-4'>
+                  <p className='text-sm font-medium'>Speaker do modelo ativo</p>
+                  <p className='mt-1 text-xs text-muted'>
+                    A voz <span className='font-medium text-foreground'>{settings.speaker}</span> foi escolhida no modal. Upload e gravacao de referencia ficam desativados, e a geracao vai priorizar esse speaker.
+                  </p>
+                </div>
+              ) : null}
+
+              {!usesModelSpeaker && inputMode === 'upload' ? (
                 <div
                   onDragOver={(event) => {
                     event.preventDefault()
@@ -360,30 +528,121 @@ export function VoiceGeneratorPage() {
                     Selecionar arquivo
                   </Button>
                 </div>
-              ) : (
+              ) : !usesModelSpeaker ? (
                 <div className='mb-4 rounded-2xl border border-border bg-surface p-4'>
-                  <p className='mb-3 text-sm font-medium'>Gravacao de referencia</p>
-                  <div className='flex flex-wrap items-center gap-2'>
-                    <Button onClick={isRecording ? stopRecording : startRecording}>
-                      {isRecording ? (
-                        <>
-                          <MicOff className='size-4' />
-                          Parar gravacao
-                        </>
-                      ) : (
-                        <>
-                          <Mic className='size-4' />
-                          Iniciar gravacao
-                        </>
-                      )}
-                    </Button>
-                    <span className='text-xs text-muted'>
-                      {isRecording ? `Gravando... ${recordSeconds}s` : 'Use uma voz clara em ambiente silencioso.'}
-                    </span>
-                  </div>
+                  <p className='text-sm font-medium'>Gravacao de referencia</p>
+                  <p className='mt-1 text-xs text-muted'>Use uma voz clara em ambiente silencioso.</p>
+                  <AnimatePresence initial={false}>
+                    {isRecording ? (
+                      <motion.div
+                        key='recording-state'
+                        className='mt-4 rounded-[24px] border border-success/30 bg-card p-4'
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -8 }}
+                        transition={{ duration: 0.22 }}
+                      >
+                        <div className='mb-3 flex items-center gap-4'>
+                          <motion.button
+                            type='button'
+                            onClick={stopRecording}
+                            className='grid size-14 shrink-0 place-items-center rounded-full border border-success/35 bg-success/10 text-success'
+                            whileTap={{ scale: 0.96 }}
+                            transition={{ duration: 0.18 }}
+                            aria-label='Parar gravacao'
+                          >
+                            <AnimatePresence mode='wait' initial={false}>
+                              <motion.span
+                                key='stop-icon'
+                                initial={{ opacity: 0, scale: 0.82, rotate: -10 }}
+                                animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                                exit={{ opacity: 0, scale: 0.82, rotate: 10 }}
+                                transition={{ duration: 0.18 }}
+                              >
+                                <MicOff className='size-5' />
+                              </motion.span>
+                            </AnimatePresence>
+                          </motion.button>
+
+                          <div className='min-w-0 flex-1'>
+                            <div className='inline-flex items-center gap-2 text-sm font-medium'>
+                              <motion.span
+                                className='size-2.5 rounded-full bg-success'
+                                animate={{ scale: [1, 1.2, 1] }}
+                                transition={{ duration: 1.1, repeat: Number.POSITIVE_INFINITY, ease: 'easeInOut' }}
+                              />
+                              Gravando agora
+                            </div>
+                            <p className='mt-1 text-xs text-muted'>Toque no icone para encerrar quando terminar a referencia.</p>
+                          </div>
+                          <p className='text-sm tabular-nums text-muted'>{recordSeconds}s</p>
+                        </div>
+
+                        <div className='rounded-2xl border border-success/20 bg-surface/70 p-3'>
+                          <div className='flex h-10 items-end gap-1 overflow-hidden'>
+                            {Array.from({ length: 20 }).map((_, index) => (
+                              <motion.span
+                                key={index}
+                                className='w-1.5 rounded-full bg-success/75'
+                                initial={{ height: 10 }}
+                                animate={{ height: [10, 28, 14, 22, 12] }}
+                                transition={{
+                                  duration: 1.1,
+                                  repeat: Number.POSITIVE_INFINITY,
+                                  ease: 'easeInOut',
+                                  delay: index * 0.045,
+                                }}
+                              />
+                            ))}
+                          </div>
+                          <p className='mt-3 text-xs text-muted'>Fale naturalmente. O preview local aparece assim que a gravacao terminar.</p>
+                        </div>
+                      </motion.div>
+                    ) : (
+                      <motion.div
+                        key='recording-idle'
+                        className='mt-4 flex items-center gap-4 rounded-[24px] border border-border bg-card p-4'
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -8 }}
+                        transition={{ duration: 0.22 }}
+                      >
+                        <motion.button
+                          type='button'
+                          onClick={startRecording}
+                          className='grid size-14 shrink-0 place-items-center rounded-full border border-border bg-surface text-muted transition-colors hover:border-accent/35 hover:text-foreground'
+                          whileTap={{ scale: 0.96 }}
+                          transition={{ duration: 0.18 }}
+                          aria-label='Iniciar gravacao'
+                        >
+                          <AnimatePresence mode='wait' initial={false}>
+                            <motion.span
+                              key='mic-icon'
+                              initial={{ opacity: 0, scale: 0.82, rotate: 10 }}
+                              animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                              exit={{ opacity: 0, scale: 0.82, rotate: -10 }}
+                              transition={{ duration: 0.18 }}
+                            >
+                              <Mic className='size-5' />
+                            </motion.span>
+                          </AnimatePresence>
+                        </motion.button>
+                        <div className='min-w-0 flex-1'>
+                          <p className='text-sm font-medium'>Pronto para gravar</p>
+                          <p className='text-xs text-muted'>Toque no icone para iniciar e use sua melhor referencia de voz.</p>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                   {recordError ? <p className='mt-2 text-xs text-danger'>{recordError}</p> : null}
                 </div>
-              )}
+              ) : null}
+
+              {usesModelSpeaker ? (
+                <div className='mb-4 rounded-2xl border border-dashed border-border bg-card px-4 py-5 text-sm text-muted'>
+                  Referencia local desativada enquanto um speaker interno do modelo estiver selecionado.
+                </div>
+              ) : null}
 
               {referenceFile ? (
                 <div className='mb-4 rounded-2xl border border-border bg-surface p-3'>
@@ -391,7 +650,22 @@ export function VoiceGeneratorPage() {
                     <CheckCircle2 className='size-3.5 text-success' />
                     Referencia selecionada: {referenceFile.name}
                   </div>
-                  <audio src={referencePreviewUrl} controls className='w-full' />
+                  <p className='mb-3 text-xs text-muted'>Preview local da referencia carregada. O audio final continua aparecendo so no fim do fluxo.</p>
+                  <div className='mb-3 grid gap-2 sm:grid-cols-3'>
+                    <div className='rounded-xl border border-border bg-card px-3 py-2'>
+                      <p className='text-[11px] text-muted'>Duracao</p>
+                      <p className='text-sm font-medium'>{formatCompactDuration(referenceDuration)}</p>
+                    </div>
+                    <div className='rounded-xl border border-border bg-card px-3 py-2'>
+                      <p className='text-[11px] text-muted'>Tamanho</p>
+                      <p className='text-sm font-medium'>{formatBytes(referenceFile.size)}</p>
+                    </div>
+                    <div className='rounded-xl border border-border bg-card px-3 py-2'>
+                      <p className='text-[11px] text-muted'>Origem</p>
+                      <p className='text-sm font-medium'>{inputMode === 'record' ? 'Gravacao local' : 'Upload'}</p>
+                    </div>
+                  </div>
+                  {referencePreviewUrl ? <audio controls src={referencePreviewUrl} className='w-full' /> : null}
                 </div>
               ) : null}
 
@@ -406,7 +680,7 @@ export function VoiceGeneratorPage() {
               </div>
 
               <div className='flex items-center justify-end'>
-                <Button onClick={handleGenerate} disabled={!canGenerate}>
+                <Button onClick={openSettingsBeforeGenerate} disabled={!canGenerate}>
                   {isSubmitting ? (
                     <>
                       <LoaderCircle className='size-4 animate-spin' />
@@ -424,7 +698,7 @@ export function VoiceGeneratorPage() {
           </motion.section>
         ) : null}
 
-        {isProcessing ? (
+        {screen === 'processing' ? (
           <motion.section
             key='voice-processing'
             className='space-y-4'
@@ -449,7 +723,7 @@ export function VoiceGeneratorPage() {
           </motion.section>
         ) : null}
 
-        {isCompleted ? (
+        {screen === 'done' ? (
           <motion.section
             key='voice-done'
             className='mx-auto w-full max-w-3xl rounded-[30px] border border-border bg-card p-6'
@@ -459,10 +733,14 @@ export function VoiceGeneratorPage() {
           >
             <div className='mb-4'>
               <h3 className='font-space text-2xl font-semibold'>Audio gerado com sucesso</h3>
-              <p className='text-sm text-muted'>Preview final com metadados da operacao.</p>
+              <p className='text-sm text-muted'>Processamento finalizado. Preview final e metadados da operacao.</p>
             </div>
 
             <div className='mb-4 rounded-2xl border border-border bg-surface p-3'>
+              <div className='mb-2 inline-flex items-center gap-2 rounded-full border border-success/30 bg-success/10 px-3 py-1 text-xs text-success'>
+                <CheckCircle2 className='size-3.5' />
+                Processamento concluido
+              </div>
               <audio controls src={resultAudioUrl} className='w-full' />
             </div>
 
@@ -496,14 +774,37 @@ export function VoiceGeneratorPage() {
             </div>
 
             <div className='flex justify-end'>
-              <Button onClick={resetFlow}>
-                <AudioLines className='size-4' />
-                Gerar novo audio
-              </Button>
+              <div className='flex flex-wrap gap-2'>
+                <Button variant='outline' onClick={() => onShowGeneratedAudiosScreenChange(true)}>
+                  <AudioLines className='size-4' />
+                  Ver audios gerados
+                </Button>
+                <Button onClick={resetFlow}>
+                  <AudioLines className='size-4' />
+                  Gerar novo audio
+                </Button>
+              </div>
             </div>
           </motion.section>
         ) : null}
       </AnimatePresence>
+
+      <AudioSettingsModal
+        open={settingsOpen}
+        settings={settings}
+        onOpenChange={(open) => {
+          onSettingsOpenChange(open)
+          if (!open) {
+            setPendingGenerate(false)
+          }
+        }}
+        onChange={onSettingChange}
+        onReset={onResetSettings}
+        onConfirm={pendingGenerate ? handleConfirmGenerate : () => onSettingsOpenChange(false)}
+        isSubmitting={isSubmitting}
+        confirmLabel={pendingGenerate ? 'Confirmar e gerar' : 'Salvar ajustes'}
+        confirmMode={pendingGenerate ? 'generate' : 'save'}
+      />
     </div>
   )
 }

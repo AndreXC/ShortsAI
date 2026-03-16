@@ -184,6 +184,40 @@ def _safe_upload_suffix(filename: str | None) -> str:
     return clean or '.wav'
 
 
+def _parse_voice_tts_kwargs(raw_text: str | None) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+    if not raw_text:
+        return parsed
+
+    for line in str(raw_text).splitlines():
+        item = line.strip()
+        if not item:
+            continue
+        if '=' not in item:
+            raise HTTPException(status_code=422, detail=f"Parametro invalido em kwargs extras: '{item}'. Use chave=valor.")
+
+        key, value = item.split('=', 1)
+        clean_key = key.strip()
+        clean_value = value.strip()
+        if not clean_key:
+            raise HTTPException(status_code=422, detail=f"Chave invalida em kwargs extras: '{item}'.")
+
+        lowered = clean_value.lower()
+        if lowered == 'true':
+            parsed[clean_key] = True
+        elif lowered == 'false':
+            parsed[clean_key] = False
+        elif lowered in {'null', 'none'}:
+            parsed[clean_key] = None
+        else:
+            try:
+                parsed[clean_key] = json.loads(clean_value)
+            except Exception:
+                parsed[clean_key] = clean_value
+
+    return parsed
+
+
 @app.get('/health')
 async def health() -> dict[str, str]:
     return {'status': 'ok'}
@@ -206,43 +240,64 @@ async def generate(payload: GenerateRequest, background_tasks: BackgroundTasks) 
 @app.post('/voice/generate', response_model=GenerateResponse, status_code=202)
 async def generate_voice(
     background_tasks: BackgroundTasks,
-    audio_file: UploadFile = File(...),
+    audio_file: UploadFile | None = File(None),
     text: str = Form(...),
     language: str = Form('pt'),
     speed: float = Form(1.4),
+    split_sentences: bool = Form(False),
+    speaker: str | None = Form(None),
+    speaker_wav: str | None = Form(None),
+    emotion: str | None = Form(None),
+    prepared_voice_ref: str | None = Form(None),
+    pipe_out: str | None = Form(None),
+    tts_kwargs_text: str | None = Form(None),
 ) -> GenerateResponse:
     clean_text = str(text or '').strip()
     if not clean_text:
         raise HTTPException(status_code=422, detail='Texto para sintese nao pode ficar vazio')
 
+    selected_speaker = (speaker or '').strip() or None
+    should_use_model_speaker = selected_speaker is not None
+    if not should_use_model_speaker and audio_file is None:
+        raise HTTPException(status_code=422, detail='Envie um arquivo de audio de referencia ou escolha um speaker do modelo.')
+
     payload_settings = {
-        'language': language,
+        'language': str(language or 'pt').strip() or 'pt',
         'speed': speed,
+        'split_sentences': bool(split_sentences),
+        'speaker': selected_speaker,
+        'speaker_wav': (speaker_wav or '').strip() or None,
+        'emotion': (emotion or '').strip() or None,
+        'prepared_voice_ref': (prepared_voice_ref or '').strip() or None,
+        'pipe_out': (pipe_out or '').strip() or None,
+        'tts_kwargs': _parse_voice_tts_kwargs(tts_kwargs_text),
         'model_name': 'xtts_v2',
     }
     job_id = voice_job_manager.create_job(text=clean_text, settings=payload_settings)
 
-    VOICE_INPUTS_DIR.mkdir(parents=True, exist_ok=True)
-    upload_suffix = _safe_upload_suffix(audio_file.filename)
-    upload_path = (VOICE_INPUTS_DIR / f'{job_id}{upload_suffix}').resolve()
+    upload_path: Path | None = None
+    if not should_use_model_speaker and audio_file is not None:
+        VOICE_INPUTS_DIR.mkdir(parents=True, exist_ok=True)
+        upload_suffix = _safe_upload_suffix(audio_file.filename)
+        upload_path = (VOICE_INPUTS_DIR / f'{job_id}{upload_suffix}').resolve()
 
-    data = await audio_file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail='Arquivo de audio vazio')
+        data = await audio_file.read()
+        if not data:
+            raise HTTPException(status_code=400, detail='Arquivo de audio vazio')
 
-    try:
-        upload_path.write_bytes(data)
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f'Falha ao salvar arquivo enviado: {exc}') from exc
+        try:
+            upload_path.write_bytes(data)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f'Falha ao salvar arquivo enviado: {exc}') from exc
 
-    voice_job_manager.set_source_path(job_id, str(upload_path))
+        voice_job_manager.set_source_path(job_id, str(upload_path))
 
     background_tasks.add_task(
         process_voice_generation_job,
         voice_job_manager,
         job_id,
         {
-            'input_path': str(upload_path),
+            'input_path': str(upload_path) if upload_path else None,
             'text': clean_text,
             'settings': payload_settings,
         },

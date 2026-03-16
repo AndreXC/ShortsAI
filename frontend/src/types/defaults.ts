@@ -1,4 +1,4 @@
-import type { GenerationSettings, TimelineStep } from '@/types/job'
+import type { AudioGenerationSettings, GenerationSettings, TimelineStep } from '@/types/job'
 
 export const defaultSettings: GenerationSettings = {
   detector_backend: 'blaze',
@@ -12,6 +12,18 @@ export const defaultSettings: GenerationSettings = {
   bitrate: '8000k',
   threads: 4,
   preset: 'slow',
+}
+
+export const defaultAudioSettings: AudioGenerationSettings = {
+  language: 'pt',
+  speed: 1.4,
+  split_sentences: false,
+  speaker: '',
+  speaker_wav: '',
+  emotion: '',
+  prepared_voice_ref: '',
+  pipe_out: '',
+  tts_kwargs_text: '',
 }
 
 export const baseTimeline: TimelineStep[] = [

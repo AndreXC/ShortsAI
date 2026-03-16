@@ -3,11 +3,12 @@
 import { Footer } from '@/components/Footer'
 import { Header } from '@/components/Header'
 import { ToastViewport } from '@/components/ToastViewport'
+import { readVoiceSettings, writeVoiceSettings } from '@/lib/voice-storage'
 import { GeneratorPage } from '@/pages/GeneratorPage'
 import { VoiceGeneratorPage } from '@/pages/VoiceGeneratorPage'
 import { useJobStore } from '@/store/jobStore'
-import { defaultSettings } from '@/types/defaults'
-import type { GenerationSettings } from '@/types/job'
+import { defaultAudioSettings, defaultSettings } from '@/types/defaults'
+import type { AudioGenerationSettings, GenerationSettings } from '@/types/job'
 
 type ThemeMode = 'light' | 'dark'
 type AppMode = 'video' | 'voice'
@@ -28,10 +29,13 @@ function getInitialTheme(): ThemeMode {
 function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settings, setSettings] = useState<GenerationSettings>(defaultSettings)
+  const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false)
+  const [voiceSettings, setVoiceSettings] = useState<AudioGenerationSettings>(() => readVoiceSettings())
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme)
   const [mode, setMode] = useState<AppMode>('video')
   const [showLogsScreen, setShowLogsScreen] = useState(false)
   const [showGeneratedShortsScreen, setShowGeneratedShortsScreen] = useState(false)
+  const [showGeneratedAudiosScreen, setShowGeneratedAudiosScreen] = useState(false)
 
   const logsLength = useJobStore((state) => state.logs.length)
   const hasJob = useJobStore((state) => Boolean(state.jobId))
@@ -44,8 +48,16 @@ function App() {
     window.localStorage.setItem('shorts-theme', theme)
   }, [theme])
 
+  useEffect(() => {
+    writeVoiceSettings(voiceSettings)
+  }, [voiceSettings])
+
   const onSettingChange = <K extends keyof GenerationSettings>(key: K, value: GenerationSettings[K]) => {
     setSettings((prev) => ({ ...prev, [key]: value }))
+  }
+
+  const onVoiceSettingChange = <K extends keyof AudioGenerationSettings>(key: K, value: AudioGenerationSettings[K]) => {
+    setVoiceSettings((prev) => ({ ...prev, [key]: value }))
   }
 
   return (
@@ -55,10 +67,19 @@ function App() {
         mode={mode}
         onChangeMode={setMode}
         onToggleTheme={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => {
+          if (mode === 'video') {
+            setSettingsOpen(true)
+            return
+          }
+          setVoiceSettingsOpen(true)
+        }}
         onOpenShorts={() => {
           setShowLogsScreen(false)
           setShowGeneratedShortsScreen(true)
+        }}
+        onOpenAudios={() => {
+          setShowGeneratedAudiosScreen(true)
         }}
         onOpenLogs={() => {
           setShowGeneratedShortsScreen(false)
@@ -80,7 +101,15 @@ function App() {
           onShowGeneratedShortsScreenChange={setShowGeneratedShortsScreen}
         />
       ) : (
-        <VoiceGeneratorPage />
+        <VoiceGeneratorPage
+          settings={voiceSettings}
+          settingsOpen={voiceSettingsOpen}
+          onSettingsOpenChange={setVoiceSettingsOpen}
+          onSettingChange={onVoiceSettingChange}
+          onResetSettings={() => setVoiceSettings(defaultAudioSettings)}
+          showGeneratedAudiosScreen={showGeneratedAudiosScreen}
+          onShowGeneratedAudiosScreenChange={setShowGeneratedAudiosScreen}
+        />
       )}
 
       <Footer />

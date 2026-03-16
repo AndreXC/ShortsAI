@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { Clapperboard, FileText, Mic, Moon, SlidersHorizontal, SunMedium } from 'lucide-react'
+import { AudioLines, Clapperboard, FileText, Mic, Moon, SlidersHorizontal, SunMedium } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 
@@ -10,6 +10,7 @@ interface HeaderProps {
   onChangeMode: (mode: 'video' | 'voice') => void
   onOpenSettings: () => void
   onOpenShorts: () => void
+  onOpenAudios: () => void
   onOpenLogs: () => void
   canOpenLogs: boolean
 }
@@ -21,6 +22,7 @@ export function Header({
   onChangeMode,
   onOpenSettings,
   onOpenShorts,
+  onOpenAudios,
   onOpenLogs,
   canOpenLogs,
 }: HeaderProps) {
@@ -90,10 +92,21 @@ export function Header({
               </Button>
             </>
           ) : (
-            <Button variant='outline' size='sm' onClick={() => onChangeMode('video')} className='sm:hidden'>
-              <Mic className='size-4' />
-              Voltar ao video
-            </Button>
+            <>
+              <Button variant='outline' size='sm' onClick={onOpenAudios}>
+                <AudioLines className='size-4' />
+                Audios
+              </Button>
+
+              <Button variant='outline' size='sm' onClick={() => onChangeMode('video')} className='sm:hidden'>
+                <Mic className='size-4' />
+                Voltar ao video
+              </Button>
+
+              <Button variant='outline' size='icon' onClick={onOpenSettings} aria-label='Abrir configuracoes de voz'>
+                <SlidersHorizontal className='size-4' />
+              </Button>
+            </>
           )}
 
           <Button variant='outline' size='icon' onClick={onToggleTheme} aria-label='Alternar tema'>

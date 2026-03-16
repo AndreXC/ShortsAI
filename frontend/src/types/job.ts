@@ -26,6 +26,30 @@ export interface GenerationSettings {
   output_name?: string
 }
 
+export interface AudioGenerationSettings {
+  language: string
+  speed: number
+  split_sentences: boolean
+  speaker: string
+  speaker_wav: string
+  emotion: string
+  prepared_voice_ref: string
+  pipe_out: string
+  tts_kwargs_text: string
+}
+
+export interface VoiceHistoryItem {
+  job_id: string
+  created_at: string
+  finished_at?: string | null
+  text_preview: string
+  reference_name?: string | null
+  input_mode: 'upload' | 'record'
+  result_url: string
+  settings: AudioGenerationSettings
+  result_metadata?: ResultMetadata | null
+}
+
 export interface GenerateRequest {
   url: string
   settings: GenerationSettings

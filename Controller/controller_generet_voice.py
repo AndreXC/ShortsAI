@@ -328,7 +328,7 @@ class GenerateVoiceController:
     def generate_tts(
         self,
         text: str,
-        speaker_wav: str,
+        speaker_wav: Optional[str],
         output_file: str,
     ) -> bool:
         """
