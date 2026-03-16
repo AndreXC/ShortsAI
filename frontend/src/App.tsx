@@ -4,11 +4,13 @@ import { Footer } from '@/components/Footer'
 import { Header } from '@/components/Header'
 import { ToastViewport } from '@/components/ToastViewport'
 import { GeneratorPage } from '@/pages/GeneratorPage'
+import { VoiceGeneratorPage } from '@/pages/VoiceGeneratorPage'
 import { useJobStore } from '@/store/jobStore'
 import { defaultSettings } from '@/types/defaults'
 import type { GenerationSettings } from '@/types/job'
 
 type ThemeMode = 'light' | 'dark'
+type AppMode = 'video' | 'voice'
 
 function getInitialTheme(): ThemeMode {
   if (typeof window === 'undefined') {
@@ -27,6 +29,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settings, setSettings] = useState<GenerationSettings>(defaultSettings)
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme)
+  const [mode, setMode] = useState<AppMode>('video')
   const [showLogsScreen, setShowLogsScreen] = useState(false)
   const [showGeneratedShortsScreen, setShowGeneratedShortsScreen] = useState(false)
 
@@ -49,6 +52,8 @@ function App() {
     <main className='relative min-h-screen text-foreground'>
       <Header
         theme={theme}
+        mode={mode}
+        onChangeMode={setMode}
         onToggleTheme={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenShorts={() => {
@@ -62,17 +67,21 @@ function App() {
         canOpenLogs={canOpenLogs}
       />
 
-      <GeneratorPage
-        settings={settings}
-        settingsOpen={settingsOpen}
-        onSettingChange={onSettingChange}
-        onSettingsOpenChange={setSettingsOpen}
-        onResetSettings={() => setSettings(defaultSettings)}
-        showLogsScreen={showLogsScreen}
-        onShowLogsScreenChange={setShowLogsScreen}
-        showGeneratedShortsScreen={showGeneratedShortsScreen}
-        onShowGeneratedShortsScreenChange={setShowGeneratedShortsScreen}
-      />
+      {mode === 'video' ? (
+        <GeneratorPage
+          settings={settings}
+          settingsOpen={settingsOpen}
+          onSettingChange={onSettingChange}
+          onSettingsOpenChange={setSettingsOpen}
+          onResetSettings={() => setSettings(defaultSettings)}
+          showLogsScreen={showLogsScreen}
+          onShowLogsScreenChange={setShowLogsScreen}
+          showGeneratedShortsScreen={showGeneratedShortsScreen}
+          onShowGeneratedShortsScreenChange={setShowGeneratedShortsScreen}
+        />
+      ) : (
+        <VoiceGeneratorPage />
+      )}
 
       <Footer />
       <ToastViewport />

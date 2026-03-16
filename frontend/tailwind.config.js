@@ -21,8 +21,8 @@ export default {
         space: ['"Space Grotesk"', 'sans-serif'],
       },
       boxShadow: {
-        soft: '0 8px 26px rgba(0, 0, 0, 0.10)',
-        card: '0 18px 45px rgba(0, 0, 0, 0.18)',
+        soft: 'none',
+        card: 'none',
       },
       keyframes: {
         'pulse-subtle': {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 import os
 import tempfile
 import zipfile
@@ -9,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
@@ -24,6 +25,8 @@ from .schemas import (
     JobsBatchActionResponse,
     JobsBatchRequest,
 )
+from .voice_job_manager import VoiceJobManager
+from .voice_worker import process_voice_generation_job
 from .worker import process_generation_job
 
 app = FastAPI(title='AI Shorts Generator API', version='1.0.0')
@@ -37,8 +40,11 @@ app.add_middleware(
 )
 
 job_manager = JobManager()
+voice_job_manager = VoiceJobManager()
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OUTPUTS_DIRS = [Path('outputs'), PROJECT_ROOT / 'outputs']
+VOICE_OUTPUTS_DIRS = [Path('voice_outputs'), PROJECT_ROOT / 'voice_outputs']
+VOICE_INPUTS_DIR = PROJECT_ROOT / 'voice_inputs'
 
 
 def _normalized_output_dirs() -> list[Path]:
@@ -46,6 +52,20 @@ def _normalized_output_dirs() -> list[Path]:
     seen: set[str] = set()
 
     for raw in OUTPUTS_DIRS:
+        resolved = raw.resolve()
+        key = str(resolved).lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(resolved)
+
+    return unique
+
+
+def _normalized_voice_output_dirs() -> list[Path]:
+    unique: list[Path] = []
+    seen: set[str] = set()
+
+    for raw in VOICE_OUTPUTS_DIRS:
         resolved = raw.resolve()
         key = str(resolved).lower()
         if key not in seen:
@@ -121,6 +141,21 @@ def _resolve_output_file(job_id: str) -> Path | None:
     return None
 
 
+def _resolve_voice_output_file(job_id: str) -> Path | None:
+    if '..' in job_id or '/' in job_id or '\\' in job_id:
+        return None
+
+    for output_root in _normalized_voice_output_dirs():
+        output_root.mkdir(parents=True, exist_ok=True)
+        for pattern in (f'{job_id}.wav', f'{job_id}.mp3', f'{job_id}.ogg', f'{job_id}.m4a'):
+            candidate = (output_root / pattern).resolve()
+            if output_root not in candidate.parents:
+                continue
+            if candidate.exists():
+                return candidate
+    return None
+
+
 def _resolve_manifest_files(job_id: str) -> list[Path]:
     files: list[Path] = []
     seen: set[str] = set()
@@ -135,6 +170,18 @@ def _resolve_manifest_files(job_id: str) -> list[Path]:
         if candidate.exists():
             files.append(candidate)
     return files
+
+
+def _safe_upload_suffix(filename: str | None) -> str:
+    raw_suffix = Path(filename or '').suffix.lower().strip()
+    if not raw_suffix:
+        return '.wav'
+    if len(raw_suffix) > 10:
+        return '.wav'
+    clean = ''.join(ch for ch in raw_suffix if ch.isalnum() or ch == '.')
+    if not clean.startswith('.'):
+        clean = f'.{clean}'
+    return clean or '.wav'
 
 
 @app.get('/health')
@@ -156,11 +203,67 @@ async def generate(payload: GenerateRequest, background_tasks: BackgroundTasks) 
     return GenerateResponse(job_id=job_id)
 
 
+@app.post('/voice/generate', response_model=GenerateResponse, status_code=202)
+async def generate_voice(
+    background_tasks: BackgroundTasks,
+    audio_file: UploadFile = File(...),
+    text: str = Form(...),
+    language: str = Form('pt'),
+    speed: float = Form(1.4),
+) -> GenerateResponse:
+    clean_text = str(text or '').strip()
+    if not clean_text:
+        raise HTTPException(status_code=422, detail='Texto para sintese nao pode ficar vazio')
+
+    payload_settings = {
+        'language': language,
+        'speed': speed,
+        'model_name': 'xtts_v2',
+    }
+    job_id = voice_job_manager.create_job(text=clean_text, settings=payload_settings)
+
+    VOICE_INPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    upload_suffix = _safe_upload_suffix(audio_file.filename)
+    upload_path = (VOICE_INPUTS_DIR / f'{job_id}{upload_suffix}').resolve()
+
+    data = await audio_file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail='Arquivo de audio vazio')
+
+    try:
+        upload_path.write_bytes(data)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f'Falha ao salvar arquivo enviado: {exc}') from exc
+
+    voice_job_manager.set_source_path(job_id, str(upload_path))
+
+    background_tasks.add_task(
+        process_voice_generation_job,
+        voice_job_manager,
+        job_id,
+        {
+            'input_path': str(upload_path),
+            'text': clean_text,
+            'settings': payload_settings,
+        },
+    )
+
+    return GenerateResponse(job_id=job_id)
+
+
 @app.get('/status/{job_id}', response_model=JobStatusResponse)
 async def get_status(job_id: str) -> JobStatusResponse:
     status = job_manager.get_status(job_id)
     if status is None:
         raise HTTPException(status_code=404, detail='Job nao encontrado')
+    return status
+
+
+@app.get('/voice/status/{job_id}', response_model=JobStatusResponse)
+async def get_voice_status(job_id: str) -> JobStatusResponse:
+    status = voice_job_manager.get_status(job_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail='Job de voz nao encontrado')
     return status
 
 
@@ -310,6 +413,54 @@ async def get_source(job_id: str) -> FileResponse:
     )
 
 
+@app.get('/voice/result/{job_id}')
+async def get_voice_result(job_id: str) -> FileResponse:
+    job = voice_job_manager.get_job(job_id)
+    if not job:
+        fallback = _resolve_voice_output_file(job_id)
+        if fallback:
+            media = mimetypes.guess_type(str(fallback))[0] or 'audio/wav'
+            return FileResponse(path=str(fallback), media_type=media, filename=fallback.name)
+        raise HTTPException(status_code=404, detail='Job de voz nao encontrado')
+
+    if job.get('status') != 'completed':
+        raise HTTPException(status_code=409, detail='O job de voz ainda nao foi concluido')
+
+    path = job.get('result_path')
+    if not path:
+        raise HTTPException(status_code=404, detail='Resultado de voz nao encontrado')
+
+    result_path = Path(str(path))
+    media = mimetypes.guess_type(str(result_path))[0] or 'audio/wav'
+    return FileResponse(
+        path=str(result_path),
+        media_type=media,
+        filename=result_path.name,
+    )
+
+
+@app.get('/voice/source/{job_id}')
+async def get_voice_source(job_id: str) -> FileResponse:
+    job = voice_job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail='Job de voz nao encontrado')
+
+    path = job.get('source_path')
+    if not path:
+        raise HTTPException(status_code=404, detail='Audio de referencia ainda indisponivel')
+
+    source_path = Path(str(path))
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail='Arquivo de referencia nao encontrado')
+
+    media = mimetypes.guess_type(str(source_path))[0] or 'audio/wav'
+    return FileResponse(
+        path=str(source_path),
+        media_type=media,
+        filename=source_path.name,
+    )
+
+
 @app.websocket('/logs/{job_id}')
 async def logs_socket(websocket: WebSocket, job_id: str) -> None:
     await websocket.accept()
@@ -348,6 +499,68 @@ async def logs_socket(websocket: WebSocket, job_id: str) -> None:
                 status_payload = job_manager.get_status(job_id)
                 if status_payload is None:
                     await websocket.send_json({'type': 'error', 'message': 'Status indisponivel'})
+                    break
+                await websocket.send_json(
+                    {
+                        'type': 'status',
+                        'data': status_payload.model_dump(mode='json'),
+                    }
+                )
+                last_version = version
+
+            if job.get('status') in {'completed', 'error', 'cancelled'}:
+                await websocket.send_json({'type': 'done', 'status': job.get('status')})
+                break
+
+            await asyncio.sleep(0.35)
+
+    except WebSocketDisconnect:
+        return
+    finally:
+        try:
+            await websocket.close()
+        except RuntimeError:
+            pass
+
+
+@app.websocket('/voice/logs/{job_id}')
+async def voice_logs_socket(websocket: WebSocket, job_id: str) -> None:
+    await websocket.accept()
+
+    if not voice_job_manager.exists(job_id):
+        await websocket.send_json({'type': 'error', 'message': 'Job de voz nao encontrado'})
+        await websocket.close(code=1008)
+        return
+
+    last_version = -1
+    log_cursor = 0
+
+    try:
+        while True:
+            job = voice_job_manager.get_job(job_id)
+            if not job:
+                await websocket.send_json({'type': 'error', 'message': 'Job de voz removido'})
+                break
+
+            logs: list[dict[str, Any]] = job.get('logs', [])
+            if log_cursor < len(logs):
+                for entry in logs[log_cursor:]:
+                    await websocket.send_json(
+                        {
+                            'type': 'log',
+                            'data': {
+                                'timestamp': entry['timestamp'].isoformat(),
+                                'message': entry['message'],
+                            },
+                        }
+                    )
+                log_cursor = len(logs)
+
+            version = int(job.get('version', 0))
+            if version != last_version:
+                status_payload = voice_job_manager.get_status(job_id)
+                if status_payload is None:
+                    await websocket.send_json({'type': 'error', 'message': 'Status de voz indisponivel'})
                     break
                 await websocket.send_json(
                     {

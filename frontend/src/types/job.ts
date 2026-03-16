@@ -47,6 +47,9 @@ export interface TimelineStep {
   status: StepStatus
   progress: number
   detail?: string | null
+  subtasks?: string[]
+  current_subtask_index?: number | null
+  completed_subtasks?: number
 }
 
 export interface JobMetrics {
@@ -68,6 +71,9 @@ export interface ResultMetadata {
   resolution?: string | null
   codec?: string | null
   size_bytes?: number | null
+  sample_rate_hz?: number | null
+  channels?: number | null
+  model_name?: string | null
 }
 
 export interface JobStatusResponse {

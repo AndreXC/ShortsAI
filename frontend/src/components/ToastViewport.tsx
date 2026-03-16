@@ -13,10 +13,10 @@ const toneIcon: Record<ToastTone, typeof CheckCircle2> = {
 }
 
 const toneStyles: Record<ToastTone, string> = {
-  info: 'bg-slate-500/70',
-  success: 'bg-emerald-500/70',
-  warning: 'bg-amber-500/70',
-  error: 'bg-rose-500/70',
+  info: 'bg-slate-500',
+  success: 'bg-emerald-500',
+  warning: 'bg-amber-500',
+  error: 'bg-rose-500',
 }
 
 export function ToastViewport() {
@@ -43,7 +43,7 @@ export function ToastViewport() {
           return (
             <motion.div
               key={toast.id}
-              className='pointer-events-auto overflow-hidden rounded-[18px] border border-white/45 bg-white/75 shadow-[0_20px_45px_rgba(0,0,0,0.18)] backdrop-blur-2xl dark:border-white/10 dark:bg-[#1b1b1dcc]/90'
+              className='pointer-events-auto overflow-hidden rounded-[18px] border border-border bg-card'
               initial={{ opacity: 0, y: -12, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -10, scale: 0.98 }}
@@ -53,7 +53,7 @@ export function ToastViewport() {
               <div className='relative px-4 py-3'>
                 <div className='mb-1.5 flex items-start justify-between gap-3'>
                   <div className='flex min-w-0 items-start gap-2.5'>
-                    <div className='mt-0.5 rounded-full border border-black/5 bg-black/5 p-1.5 dark:border-white/10 dark:bg-white/10'>
+                    <div className='mt-0.5 rounded-full border border-border bg-surface p-1.5'>
                       <Icon className='size-3.5 text-foreground' />
                     </div>
                     <div className='min-w-0'>
@@ -67,14 +67,14 @@ export function ToastViewport() {
                   <button
                     type='button'
                     onClick={() => remove(toast.id)}
-                    className='rounded-full p-1 text-muted transition hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10'
+                    className='rounded-full p-1 text-muted transition hover:bg-surface hover:text-foreground'
                     aria-label='Fechar notificacao'
                   >
                     <X className='size-3.5' />
                   </button>
                 </div>
 
-                <div className='relative h-[2px] w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10'>
+                <div className='relative h-[2px] w-full overflow-hidden rounded-full bg-border/70'>
                   <motion.div
                     className={cn('absolute inset-y-0 left-0 rounded-full', toneStyles[toast.tone])}
                     initial={{ width: '100%' }}

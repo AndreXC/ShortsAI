@@ -10,11 +10,7 @@ import type {
   JobsBatchActionResponse,
 } from '@/types/job'
 
-const api = axios.create({
-  headers: {
-    'Content-Type': 'application/json',
-  },
-})
+const api = axios.create()
 
 function normalizeHistoryResponse(payload: unknown): JobHistoryItem[] {
   let rawList: unknown[] = []
@@ -93,4 +89,22 @@ export async function pingHealth(): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+export async function generateVoice(payload: FormData): Promise<GenerateResponse> {
+  const response = await api.post<GenerateResponse>(getApiUrl('/voice/generate'), payload, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  })
+  return response.data
+}
+
+export async function getVoiceStatus(jobId: string): Promise<JobStatusResponse> {
+  const response = await api.get<JobStatusResponse>(getApiUrl(`/voice/status/${jobId}`))
+  return response.data
+}
+
+export function getVoiceResultAudioUrl(jobId: string): string {
+  return getApiUrl(`/voice/result/${jobId}`)
 }

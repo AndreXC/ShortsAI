@@ -81,14 +81,14 @@ function ShortsTile({ item, selected, selectionMode, onOpen, onToggleSelect, onD
         onToggleSelect(item.job_id)
       }}
       className={cn(
-        'group relative overflow-hidden rounded-2xl border border-border bg-card/80 text-left transition hover:-translate-y-0.5 hover:border-accent/35 hover:shadow-soft',
-        selected && 'border-accent/60 shadow-soft ring-2 ring-accent/20',
+        'group relative overflow-hidden rounded-2xl border border-border bg-card text-left transition hover:border-accent/35',
+        selected && 'border-accent/60 bg-surface',
       )}
       title='Clique direito para selecionar'
     >
       <div className='relative aspect-[9/16] w-full overflow-hidden bg-black'>
         <video className='h-full w-full object-cover' src={thumbUrl} muted playsInline preload='metadata' />
-        <div className='absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent p-2.5'>
+        <div className='absolute inset-x-0 bottom-0 border-t border-white/10 bg-black/72 p-2.5'>
           <p className='text-[11px] text-white/90'>{formatDate(item.created_at)}</p>
           <p className='text-[10px] text-white/70'>
             {item.detector_backend === 'retinaface'
@@ -101,7 +101,7 @@ function ShortsTile({ item, selected, selectionMode, onOpen, onToggleSelect, onD
 
         <button
           type='button'
-          className='absolute left-2 top-2 z-10 rounded-full border border-white/25 bg-black/45 p-1 text-white backdrop-blur transition hover:bg-black/65'
+          className='absolute left-2 top-2 z-10 rounded-full border border-white/25 bg-black/70 p-1 text-white transition hover:bg-black/85'
           onClick={(event) => {
             event.stopPropagation()
             onDelete(item)
@@ -112,12 +112,12 @@ function ShortsTile({ item, selected, selectionMode, onOpen, onToggleSelect, onD
           <Trash2 className='size-3.5' />
         </button>
 
-        <div className='absolute right-2 top-2 rounded-full border border-white/25 bg-black/45 p-1 text-white backdrop-blur'>
+        <div className='absolute right-2 top-2 rounded-full border border-white/25 bg-black/70 p-1 text-white'>
           {selected ? <Check className='size-3.5' /> : <Expand className='size-3.5' />}
         </div>
 
         <div className='absolute inset-0 grid place-items-center'>
-          <div className='rounded-full border border-white/35 bg-black/55 p-2 text-white backdrop-blur'>
+          <div className='rounded-full border border-white/35 bg-black/70 p-2 text-white'>
             <Play className='size-4' />
           </div>
         </div>
@@ -174,14 +174,14 @@ function DeleteConfirmModal({ open, count, loading, onCancel, onConfirm }: Delet
     <AnimatePresence>
       {open ? (
         <motion.div
-          className='fixed inset-0 z-[95] grid place-items-center bg-black/65 p-4 backdrop-blur-sm'
+          className='fixed inset-0 z-[95] grid place-items-center bg-black/75 p-4'
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           onClick={onCancel}
         >
           <motion.div
-            className='mx-auto w-[min(92vw,500px)] rounded-[24px] border border-border bg-card/95 p-5 shadow-[0_28px_70px_rgba(0,0,0,0.45)] backdrop-blur-xl'
+            className='mx-auto w-[min(92vw,500px)] rounded-[24px] border border-border bg-card p-5'
             initial={{ y: 16, scale: 0.98, opacity: 0 }}
             animate={{ y: 0, scale: 1, opacity: 1 }}
             exit={{ y: 10, scale: 0.98, opacity: 0 }}
@@ -457,7 +457,7 @@ export function GeneratedShortsScreen({ onBack }: GeneratedShortsScreenProps) {
       <AnimatePresence>
         {selected ? (
           <motion.div
-            className='fixed inset-0 z-[80] grid place-items-center bg-black/72 p-4 backdrop-blur-sm'
+            className='fixed inset-0 z-[80] grid place-items-center bg-black/75 p-4'
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -474,7 +474,7 @@ export function GeneratedShortsScreen({ onBack }: GeneratedShortsScreenProps) {
               <button
                 type='button'
                 className={cn(
-                  'absolute -right-2 -top-2 z-10 rounded-full border border-white/30 bg-black/60 p-2 text-white backdrop-blur',
+                  'absolute -right-2 -top-2 z-10 rounded-full border border-white/30 bg-black/70 p-2 text-white',
                   'transition hover:bg-black/80',
                 )}
                 onClick={() => setSelected(null)}
@@ -483,7 +483,7 @@ export function GeneratedShortsScreen({ onBack }: GeneratedShortsScreenProps) {
                 <X className='size-4' />
               </button>
 
-              <div className='overflow-hidden rounded-[2rem] border border-white/20 bg-black shadow-[0_30px_80px_rgba(0,0,0,0.6)]'>
+              <div className='overflow-hidden rounded-[2rem] border border-white/20 bg-black'>
                 <video className='aspect-[9/16] h-auto w-full object-cover' src={selectedVideoUrl} controls playsInline preload='metadata' />
               </div>
             </motion.div>

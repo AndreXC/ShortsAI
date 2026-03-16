@@ -104,7 +104,7 @@ function TimelineSegment({ tone, style }: { tone: SegmentTone; style: CSSPropert
     >
       {tone === 'active' ? (
         <motion.span
-          className='absolute inset-0 w-px bg-accent shadow-[0_0_10px_rgba(180,180,180,0.55)]'
+          className='absolute inset-0 w-px bg-accent'
           animate={{ opacity: [0.25, 1, 0.25] }}
           transition={{ duration: 1.2, repeat: Number.POSITIVE_INFINITY, ease: 'easeInOut' }}
         />
@@ -214,8 +214,8 @@ function TimelineCard({ step, index, total }: { step: TimelineStep; index: numbe
       layout='position'
       transition={{ duration: 0.2 }}
       className={cn(
-        'rounded-[20px] border border-border bg-card/92 p-4 shadow-soft',
-        isRunning && 'border-accent/45 bg-accent/[0.06] shadow-[0_12px_28px_rgba(0,0,0,0.28)]',
+        'rounded-[20px] border border-border bg-card p-4',
+        isRunning && 'border-accent/45 bg-surface',
       )}
     >
       <div className='mb-3 flex flex-wrap items-start justify-between gap-3'>

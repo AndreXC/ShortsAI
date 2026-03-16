@@ -9,7 +9,7 @@ import { ProgressIndicator } from '@/components/ProgressIndicator'
 import { ProcessingTimeline } from '@/components/ProcessingTimeline'
 import { SettingsModal } from '@/components/SettingsModal'
 import { VideoPreview } from '@/components/VideoPreview'
-import { YoutubeInputCard } from '@/components/YoutubeInputCard'
+import { YoutubeInputCard, type PresetId } from '@/components/YoutubeInputCard'
 import { Button } from '@/components/ui/button'
 import { useGenerateShorts } from '@/hooks/useGenerateShorts'
 import { useJobSocket } from '@/hooks/useJobSocket'
@@ -237,6 +237,41 @@ export function GeneratorPage({
     startGeneration(url, settings)
   }
 
+  const handleApplyPreset = (preset: PresetId) => {
+    if (preset === 'fast') {
+      onSettingChange('detector_backend', 'blaze')
+      onSettingChange('youtube_quality', '720p')
+      onSettingChange('detect_every_frames', 5)
+      onSettingChange('smooth_factor', 0.1)
+      onSettingChange('codec', 'libx264')
+      onSettingChange('audio_codec', 'aac')
+      onSettingChange('bitrate', '5000k')
+      onSettingChange('preset', 'veryfast')
+      return
+    }
+
+    if (preset === 'balanced') {
+      onSettingChange('detector_backend', 'blaze')
+      onSettingChange('youtube_quality', '1080p')
+      onSettingChange('detect_every_frames', 3)
+      onSettingChange('smooth_factor', 0.08)
+      onSettingChange('codec', 'libx264')
+      onSettingChange('audio_codec', 'aac')
+      onSettingChange('bitrate', '8000k')
+      onSettingChange('preset', 'medium')
+      return
+    }
+
+    onSettingChange('detector_backend', 'retinaface')
+    onSettingChange('youtube_quality', '1080p')
+    onSettingChange('detect_every_frames', 1)
+    onSettingChange('smooth_factor', 0.06)
+    onSettingChange('codec', 'libx265')
+    onSettingChange('audio_codec', 'aac')
+    onSettingChange('bitrate', '12000k')
+    onSettingChange('preset', 'slow')
+  }
+
   const onRetry = () => {
     if (!retryUrl) {
       pushToast({
@@ -309,6 +344,7 @@ export function GeneratorPage({
                 onUrlChange={setUrl}
                 onGenerate={onGenerate}
                 onOpenSettings={() => onSettingsOpenChange(true)}
+                onApplyPreset={handleApplyPreset}
               />
 
               {mutation.isError ? (

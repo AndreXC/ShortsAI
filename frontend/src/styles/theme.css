@@ -38,15 +38,7 @@ body {
 body {
   font-family: 'Inter', sans-serif;
   color: rgb(var(--color-foreground));
-  background-image:
-    radial-gradient(circle at 18% 12%, rgb(255 255 255 / 0.68), transparent 36%),
-    radial-gradient(circle at 88% 20%, rgb(240 240 240 / 0.62), transparent 34%);
-}
-
-.dark body {
-  background-image:
-    radial-gradient(circle at 20% 14%, rgb(255 255 255 / 0.045), transparent 36%),
-    radial-gradient(circle at 82% 22%, rgb(255 255 255 / 0.03), transparent 38%);
+  background-image: none;
 }
 
 .font-space {
@@ -54,9 +46,7 @@ body {
 }
 
 .glass {
-  background: rgb(var(--color-card) / 0.78);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: rgb(var(--color-card));
 }
 
 .hide-scrollbar {

@@ -59,6 +59,9 @@ class TimelineStep(BaseModel):
     status: StepStatus
     progress: float = Field(default=0.0, ge=0.0, le=1.0)
     detail: Optional[str] = None
+    subtasks: list[str] = Field(default_factory=list)
+    current_subtask_index: Optional[int] = Field(default=None, ge=0)
+    completed_subtasks: int = Field(default=0, ge=0)
 
 
 class JobMetrics(BaseModel):
@@ -80,6 +83,9 @@ class ResultMetadata(BaseModel):
     resolution: Optional[str] = None
     codec: Optional[str] = None
     size_bytes: Optional[int] = Field(default=None, ge=0)
+    sample_rate_hz: Optional[int] = Field(default=None, ge=0)
+    channels: Optional[int] = Field(default=None, ge=0)
+    model_name: Optional[str] = None
 
 
 class JobStatusResponse(BaseModel):

@@ -72,11 +72,12 @@ export function SettingsModal({ open, settings, onOpenChange, onChange, onReset 
   return (
     <TooltipProvider delayDuration={120}>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent>
+        <DialogContent className='w-[96vw] max-w-[980px] p-7 md:p-8'>
           <DialogHeader>
-            <DialogTitle>Configuracoes Avancadas</DialogTitle>
+            <DialogTitle>Definições</DialogTitle>
             <DialogDescription>
-              Ajuste o processamento antes de gerar. Layout otimizado em 2 colunas para edicao rapida.
+              Este painel define como o Shorts sera gerado, incluindo qualidade final, desempenho de processamento e
+              precisao da IA no recorte automatico.
             </DialogDescription>
           </DialogHeader>
 
